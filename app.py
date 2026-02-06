@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import random
 import json
-import time
 from streamlit_option_menu import option_menu
 from auth import Authentication
 from database import Database
@@ -13,12 +12,6 @@ import io
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 import numpy as np
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import requests
-# from twilio.rest import Client  # Removed: Add twilio to requirements.txt if needed
-import threading
 
 # Page configuration
 st.set_page_config(
@@ -28,7 +21,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS with notification styles
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -128,37 +121,6 @@ st.markdown("""
     .receipt-table tr:nth-child(even) {
         background-color: #f2f2f2;
     }
-    .notification-badge {
-        position: relative;
-        display: inline-block;
-    }
-    .notification-badge::after {
-        content: '🔔';
-        position: absolute;
-        top: -5px;
-        right: -5px;
-        font-size: 0.8rem;
-        animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-        0% { opacity: 1; }
-        50% { opacity: 0.5; }
-        100% { opacity: 1; }
-    }
-    .mobile-payment-card {
-        background: linear-gradient(135deg, #00B894 0%, #00A085 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-    }
-    .sms-notification {
-        background-color: #E3F2FD;
-        border-left: 4px solid #2196F3;
-        padding: 10px;
-        margin: 10px 0;
-        border-radius: 5px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -173,206 +135,10 @@ if 'selected_module' not in st.session_state:
     st.session_state.selected_module = "Dashboard"
 if 'last_receipt' not in st.session_state:
     st.session_state.last_receipt = None
-if 'notifications' not in st.session_state:
-    st.session_state.notifications = []
-if 'notification_count' not in st.session_state:
-    st.session_state.notification_count = 0
-if 'mobile_payment_config' not in st.session_state:
-    st.session_state.mobile_payment_config = {
-        'enabled': True,
-        'providers': ['M-Pesa', 'Airtel Money', 'T-Kash', 'Equitel'],
-        'default_provider': 'M-Pesa'
-    }
 
 # Initialize classes
 auth = Authentication()
 db = Database()
-
-# Notification Manager Class
-class NotificationManager:
-    def __init__(self):
-        self.sms_config = {
-            'enabled': False,
-            'provider': 'twilio',  # 'twilio' or 'africastalking'
-            'twilio_sid': '',
-            'twilio_token': '',
-            'twilio_number': '',
-            'africastalking_username': '',
-            'africastalking_api_key': ''
-        }
-        self.email_config = {
-            'enabled': False,
-            'smtp_server': 'smtp.gmail.com',
-            'smtp_port': 587,
-            'sender_email': '',
-            'sender_password': '',
-            'recipients': []
-        }
-        
-    def send_sms(self, phone_number, message):
-        """Send SMS notification"""
-        try:
-            if not self.sms_config['enabled']:
-                return False, "SMS notifications disabled"
-                
-            if self.sms_config['provider'] == 'twilio' and self.sms_config['twilio_sid']:
-                client = Client(self.sms_config['twilio_sid'], 
-                              self.sms_config['twilio_token'])
-                message = client.messages.create(
-                    body=message,
-                    from_=self.sms_config['twilio_number'],
-                    to=phone_number
-                )
-                return True, f"SMS sent: {message.sid}"
-            elif self.sms_config['provider'] == 'africastalking':
-                # Implement Africa's Talking API
-                pass
-            return False, "SMS configuration incomplete"
-        except Exception as e:
-            return False, f"SMS error: {str(e)}"
-    
-    def send_email(self, subject, body, to_email=None):
-        """Send email notification"""
-        try:
-            if not self.email_config['enabled']:
-                return False, "Email notifications disabled"
-                
-            msg = MIMEMultipart()
-            msg['From'] = self.email_config['sender_email']
-            msg['To'] = to_email if to_email else ', '.join(self.email_config['recipients'])
-            msg['Subject'] = subject
-            
-            msg.attach(MIMEText(body, 'plain'))
-            
-            server = smtplib.SMTP(self.email_config['smtp_server'], 
-                                 self.email_config['smtp_port'])
-            server.starttls()
-            server.login(self.email_config['sender_email'], 
-                        self.email_config['sender_password'])
-            server.send_message(msg)
-            server.quit()
-            
-            return True, "Email sent successfully"
-        except Exception as e:
-            return False, f"Email error: {str(e)}"
-    
-    def add_notification(self, title, message, notification_type="info"):
-        """Add notification to session state"""
-        notification = {
-            'id': len(st.session_state.notifications) + 1,
-            'title': title,
-            'message': message,
-            'type': notification_type,
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'read': False
-        }
-        st.session_state.notifications.insert(0, notification)
-        st.session_state.notification_count += 1
-    
-    def check_stock_alerts(self, products):
-        """Check for low stock alerts"""
-        for product in products:
-            if product['stock_quantity'] < product['min_stock_level'] * 0.3:
-                # Critical stock
-                title = f"🚨 CRITICAL: {product['name']}"
-                message = f"{product['name']} has only {product['stock_quantity']} units left (min: {product['min_stock_level']})"
-                self.add_notification(title, message, "danger")
-                
-                # Send external notifications
-                if self.email_config['enabled']:
-                    self.send_email(
-                        f"Critical Stock Alert: {product['name']}",
-                        f"Product: {product['name']}\nCurrent Stock: {product['stock_quantity']}\nMinimum Required: {product['min_stock_level']}\nCategory: {product['category']}"
-                    )
-                
-            elif product['stock_quantity'] < product['min_stock_level']:
-                # Low stock
-                title = f"⚠️ LOW STOCK: {product['name']}"
-                message = f"{product['name']} is running low: {product['stock_quantity']} units"
-                self.add_notification(title, message, "warning")
-
-# Mobile Payment Processor Class
-class MobilePaymentProcessor:
-    def __init__(self):
-        self.providers = {
-            'M-Pesa': {
-                'enabled': True,
-                'api_url': 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
-                'consumer_key': '',
-                'consumer_secret': '',
-                'shortcode': '',
-                'passkey': ''
-            },
-            'Airtel Money': {
-                'enabled': True,
-                'api_url': 'https://openapi.airtel.africa',
-                'client_id': '',
-                'client_secret': ''
-            },
-            'T-Kash': {
-                'enabled': True,
-                'api_url': 'https://api.t-kash.co.ke',
-                'api_key': ''
-            },
-            'Equitel': {
-                'enabled': True,
-                'api_url': 'https://equitel.com/api',
-                'api_key': ''
-            }
-        }
-    
-    def initiate_payment(self, provider, phone_number, amount, reference):
-        """Initiate mobile payment"""
-        try:
-            if provider == 'M-Pesa':
-                return self._process_mpesa(phone_number, amount, reference)
-            elif provider == 'Airtel Money':
-                return self._process_airtel(phone_number, amount, reference)
-            elif provider == 'T-Kash':
-                return self._process_tkash(phone_number, amount, reference)
-            elif provider == 'Equitel':
-                return self._process_equitel(phone_number, amount, reference)
-            else:
-                return False, "Provider not supported"
-        except Exception as e:
-            return False, f"Payment error: {str(e)}"
-    
-    def _process_mpesa(self, phone_number, amount, reference):
-        """Process M-Pesa payment (simulated)"""
-        # In production, implement actual M-Pesa API calls
-        # This is a simulation
-        st.success(f"📱 M-Pesa payment initiated for KES {amount:,.2f}")
-        st.info(f"Check your phone {phone_number} to complete payment")
-        
-        # Simulate payment confirmation after 3 seconds
-        time.sleep(3)
-        
-        return True, f"MPESA{random.randint(100000, 999999)}"
-    
-    def _process_airtel(self, phone_number, amount, reference):
-        """Process Airtel Money payment (simulated)"""
-        st.success(f"📱 Airtel Money payment initiated for KES {amount:,.2f}")
-        st.info(f"Check your phone {phone_number} to complete payment")
-        time.sleep(3)
-        return True, f"AIRTEL{random.randint(100000, 999999)}"
-    
-    def _process_tkash(self, phone_number, amount, reference):
-        """Process T-Kash payment (simulated)"""
-        st.success(f"📱 T-Kash payment initiated for KES {amount:,.2f}")
-        st.info(f"Check your phone {phone_number} to complete payment")
-        time.sleep(3)
-        return True, f"TRKASH{random.randint(100000, 999999)}"
-    
-    def _process_equitel(self, phone_number, amount, reference):
-        """Process Equitel payment (simulated)"""
-        st.success(f"📱 Equitel payment initiated for KES {amount:,.2f}")
-        st.info(f"Check your phone {phone_number} to complete payment")
-        time.sleep(3)
-        return True, f"EQUITEL{random.randint(100000, 999999)}"
-
-# Initialize managers
-notification_manager = NotificationManager()
-payment_processor = MobilePaymentProcessor()
 
 # MODULE 1: User Authentication Interface
 def show_login():
@@ -406,14 +172,6 @@ def show_login():
                         }
                         st.session_state.selected_module = "Dashboard"
                         st.success(f"Welcome, {result.get('username', 'User')}!")
-                        
-                        # Add login notification
-                        notification_manager.add_notification(
-                            "👋 Welcome Back!",
-                            f"User {username} logged in successfully",
-                            "success"
-                        )
-                        
                         st.rerun()
                     else:
                         error_msg = result.get('error', 'Invalid credentials') if result else 'Login failed'
@@ -444,23 +202,12 @@ def quicksort_products(products, key='name'):
         right = [x for x in products if x[key] > pivot]
         return quicksort_products(left, key) + middle + quicksort_products(right, key)
 
-# MODULE 2: Dashboard (Enhanced with Notifications)
+# MODULE 2: Dashboard
 def show_dashboard():
     st.markdown("<h1 class='main-header'>📊 Dashboard Overview</h1>", unsafe_allow_html=True)
     
-    # Notification Bell
-    col_notif, col_space = st.columns([1, 10])
-    with col_notif:
-        if st.session_state.notification_count > 0:
-            st.markdown(f'<div class="notification-badge">🔔 {st.session_state.notification_count}</div>', unsafe_allow_html=True)
-            if st.button("📨", help="View Notifications"):
-                show_notifications_popup()
-    
     # Get sample data
     products, users = db.get_sample_data()
-    
-    # Check for stock alerts
-    notification_manager.check_stock_alerts(products)
     
     # Calculate metrics
     total_products = len(products)
@@ -563,85 +310,10 @@ def show_dashboard():
         
         df_alerts = pd.DataFrame(alert_data)
         st.dataframe(df_alerts, width='stretch', hide_index=True)
-        
-        # Add SMS/Email notification buttons
-        st.markdown("### 🔔 Send Stock Alerts")
-        col_sms, col_email = st.columns(2)
-        
-        with col_sms:
-            if st.button("📱 Send SMS Alerts", type="primary"):
-                send_stock_alerts_sms(low_stock_items)
-        
-        with col_email:
-            if st.button("📧 Send Email Alerts", type="primary"):
-                send_stock_alerts_email(low_stock_items)
     else:
         st.success("🎉 All products have sufficient stock levels!")
 
-def show_notifications_popup():
-    """Display notifications popup"""
-    with st.expander("📨 Notifications", expanded=True):
-        if not st.session_state.notifications:
-            st.info("No new notifications")
-        else:
-            for notification in st.session_state.notifications[:10]:  # Show last 10
-                col1, col2, col3 = st.columns([8, 2, 1])
-                with col1:
-                    if notification['type'] == 'danger':
-                        st.error(f"**{notification['title']}**\n{notification['message']}")
-                    elif notification['type'] == 'warning':
-                        st.warning(f"**{notification['title']}**\n{notification['message']}")
-                    elif notification['type'] == 'success':
-                        st.success(f"**{notification['title']}**\n{notification['message']}")
-                    else:
-                        st.info(f"**{notification['title']}**\n{notification['message']}")
-                with col2:
-                    st.caption(notification['timestamp'])
-                with col3:
-                    if not notification['read']:
-                        if st.button("✓", key=f"read_{notification['id']}"):
-                            notification['read'] = True
-                            st.session_state.notification_count -= 1
-                            st.rerun()
-            
-            if st.button("Clear All Notifications"):
-                st.session_state.notifications = []
-                st.session_state.notification_count = 0
-                st.rerun()
-
-def send_stock_alerts_sms(low_stock_items):
-    """Send SMS alerts for low stock items"""
-    # This would require actual SMS gateway configuration
-    st.warning("SMS notifications require configuration in Settings > Notifications")
-    st.info("Configure Twilio or Africa's Talking API to enable SMS alerts")
-
-def send_stock_alerts_email(low_stock_items):
-    """Send email alerts for low stock items"""
-    if not notification_manager.email_config['enabled']:
-        st.warning("Email notifications are disabled. Enable in Settings > Notifications")
-        return
-    
-    try:
-        subject = f"Stock Alert - {datetime.now().strftime('%Y-%m-%d')}"
-        body = "Low Stock Items:\n\n"
-        for item in low_stock_items:
-            status = "CRITICAL" if item['stock_quantity'] < item['min_stock_level'] * 0.3 else "LOW"
-            body += f"- {item['name']}: {item['stock_quantity']} units (Min: {item['min_stock_level']}) - {status}\n"
-        
-        success, message = notification_manager.send_email(subject, body)
-        if success:
-            st.success("Email alerts sent successfully!")
-            notification_manager.add_notification(
-                "📧 Email Sent",
-                "Low stock alerts emailed to recipients",
-                "success"
-            )
-        else:
-            st.error(f"Failed to send email: {message}")
-    except Exception as e:
-        st.error(f"Error sending email: {str(e)}")
-
-# MODULE 3: Sales Processing Interface (Enhanced with Mobile Payments)
+# MODULE 3: Sales Processing Interface
 def show_sales_processing():
     st.markdown("<h1 class='main-header'>🛒 Sales Processing</h1>", unsafe_allow_html=True)
     
@@ -765,56 +437,47 @@ def show_sales_processing():
             
             st.markdown("---")
             
-            # Payment options - Enhanced with mobile payments
+            # Payment options
             payment_method = st.selectbox("💳 Payment Method", 
-                                         ["Cash", "Credit Card", "M-Pesa", "Airtel Money", "T-Kash", "Equitel", "Debit Card", "Bank Transfer"])
+                                         ["Cash", "Credit Card", "M-Pesa", "Debit Card", "Bank Transfer"])
             
             customer_name = st.text_input("👤 Customer Name", placeholder="Enter customer name")
             
-            # Mobile payment details if selected
-            if payment_method in ["M-Pesa", "Airtel Money", "T-Kash", "Equitel"]:
-                st.markdown(f'<div class="mobile-payment-card">📱 {payment_method} Payment</div>', unsafe_allow_html=True)
-                phone_number = st.text_input("📱 Phone Number", placeholder="2547XXXXXXXX")
-                send_receipt_sms = st.checkbox("📨 Send SMS receipt to customer", value=True)
-                
-                if st.button(f"Initiate {payment_method} Payment", type="primary"):
-                    if phone_number and len(phone_number) >= 10:
-                        with st.spinner(f"Initiating {payment_method} payment..."):
-                            success, reference = payment_processor.initiate_payment(
-                                payment_method, phone_number, final_total, 
-                                f"TXN{datetime.now().strftime('%Y%m%d%H%M%S')}"
-                            )
-                            
-                            if success:
-                                st.success(f"✅ {payment_method} payment initiated successfully!")
-                                st.info(f"Transaction Reference: {reference}")
-                                
-                                if send_receipt_sms:
-                                    # Send SMS receipt
-                                    sms_message = f"Payment of KES {final_total:,.2f} received. Ref: {reference}. Thank you!"
-                                    sms_success, sms_msg = notification_manager.send_sms(phone_number, sms_message)
-                                    if sms_success:
-                                        st.success("📨 SMS receipt sent to customer")
-                                
-                                # Complete the sale
-                                complete_sale(customer_name, payment_method, final_total, reference)
-                            else:
-                                st.error(f"Payment failed: {reference}")
-                    else:
-                        st.warning("Please enter a valid phone number")
-            else:
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    if st.button("✅ Complete Sale", type="primary"):
-                        if customer_name:
-                            complete_sale(customer_name, payment_method, final_total)
-                        else:
-                            st.warning("Please enter customer name")
-            
-                with col_btn2:
-                    if st.button("🗑️ Clear Cart", type="secondary"):
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                if st.button("✅ Complete Sale", type="primary"):
+                    if customer_name:
+                        # Generate receipt
+                        receipt_data = {
+                            'transaction_id': f"TXN{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                            'customer_name': customer_name,
+                            'items': st.session_state.cart.copy(),
+                            'subtotal': cart_total,
+                            'tax_rate': tax_rate,
+                            'tax_amount': tax_amount,
+                            'total': final_total,
+                            'payment_method': payment_method,
+                            'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            'user': st.session_state.current_user['username']
+                        }
+                        
+                        # Save receipt to session
+                        st.session_state.last_receipt = receipt_data
                         st.session_state.cart = []
-                        st.rerun()
+                        
+                        st.success(f"✅ Sale completed! Transaction ID: {receipt_data['transaction_id']}")
+                        st.balloons()
+                        
+                        # Show receipt preview
+                        st.markdown("---")
+                        show_receipt_preview(receipt_data)
+                    else:
+                        st.warning("Please enter customer name")
+            
+            with col_btn2:
+                if st.button("🗑️ Clear Cart", type="secondary"):
+                    st.session_state.cart = []
+                    st.rerun()
         
         # Show last receipt if exists
         if st.session_state.last_receipt:
@@ -822,58 +485,787 @@ def show_sales_processing():
             if st.button("📄 View Last Receipt"):
                 show_receipt_preview(st.session_state.last_receipt)
 
-def complete_sale(customer_name, payment_method, final_total, mobile_ref=None):
-    """Complete sale and generate receipt"""
-    # Generate receipt
-    receipt_data = {
-        'transaction_id': f"TXN{datetime.now().strftime('%Y%m%d%H%M%S')}",
-        'customer_name': customer_name,
-        'items': st.session_state.cart.copy(),
-        'subtotal': sum(item['total'] for item in st.session_state.cart),
-        'tax_rate': 16.0,  # Default tax
-        'tax_amount': sum(item['total'] for item in st.session_state.cart) * 0.16,
-        'total': final_total,
-        'payment_method': payment_method,
-        'mobile_ref': mobile_ref,
-        'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'user': st.session_state.current_user['username']
-    }
+def show_receipt_preview(receipt_data):
+    """Display receipt preview - FIXED VERSION"""
+    st.markdown("### 📄 Receipt Preview")
     
-    # Save receipt to session
-    st.session_state.last_receipt = receipt_data
+    # Create receipt using Streamlit components instead of raw HTML
+    with st.container():
+        st.markdown(f"""
+        <div style="border: 1px solid #ddd; padding: 20px; border-radius: 10px; background-color: #f9f9f9;">
+            <h3 style="text-align: center; color: #1E3A8A;">SALPHINE CHEMOS GETAWAY RESORT</h3>
+            <p style="text-align: center;">P.O. Box 19938 - 00202 KNH Nairobi</p>
+            <p style="text-align: center;">Tel: +254 727 680 468 | +254 736 880 488</p>
+            <p style="text-align: center;">Email: info@lukenyagetaway.com</p>
+            <hr>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Transaction details
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**Transaction ID:** {receipt_data['transaction_id']}")
+            st.markdown(f"**Date:** {receipt_data['date']}")
+        with col2:
+            st.markdown(f"**Customer:** {receipt_data['customer_name']}")
+            st.markdown(f"**Cashier:** {receipt_data['user']}")
+        
+        st.markdown("---")
+        
+        # Items table using Streamlit dataframe
+        st.markdown("**Items Purchased:**")
+        items_data = []
+        for item in receipt_data['items']:
+            items_data.append({
+                'Item': item['name'],
+                'Qty': item['quantity'],
+                'Price': f"KES {item['price']:,.2f}",
+                'Total': f"KES {item['total']:,.2f}"
+            })
+        
+        df_items = pd.DataFrame(items_data)
+        st.dataframe(df_items, width='stretch', hide_index=True)
+        
+        st.markdown("---")
+        
+        # Summary
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col2:
+            st.markdown(f"**Subtotal:**")
+            st.markdown(f"**Tax ({receipt_data['tax_rate']}%):**")
+            st.markdown("**Total:**")
+        with col3:
+            st.markdown(f"KES {receipt_data['subtotal']:,.2f}")
+            st.markdown(f"KES {receipt_data['tax_amount']:,.2f}")
+            st.markdown(f"**KES {receipt_data['total']:,.2f}**")
+        
+        st.markdown("---")
+        st.markdown(f"**Payment Method:** {receipt_data['payment_method']}")
+        
+        st.markdown("""
+        <div style="text-align: center; margin-top: 20px;">
+            <p>Thank you for your business!</p>
+            <p>Visit us: www.salphinechemos.com</p>
+        </div>
+        """, unsafe_allow_html=True)
     
-    # Update stock quantities
-    products, _ = db.get_sample_data()
-    for cart_item in st.session_state.cart:
-        for product in products:
-            if product['id'] == cart_item['id']:
-                product['stock_quantity'] -= cart_item['quantity']
-                break
-    
-    # Clear cart
-    st.session_state.cart = []
-    
-    # Add notification
-    notification_manager.add_notification(
-        "💰 Sale Completed",
-        f"Transaction {receipt_data['transaction_id']} for KES {final_total:,.2f}",
-        "success"
-    )
-    
-    # Check stock levels after sale
-    notification_manager.check_stock_alerts(products)
-    
-    st.success(f"✅ Sale completed! Transaction ID: {receipt_data['transaction_id']}")
-    st.balloons()
-    
-    # Show receipt preview
-    show_receipt_preview(receipt_data)
+    # Export buttons
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📥 Download PDF Receipt"):
+            generate_pdf_receipt(receipt_data)
+    with col2:
+        if st.button("📊 Export to Excel"):
+            generate_excel_receipt(receipt_data)
 
-# MODULE 10: Enhanced Settings with Notification Configuration
+def generate_pdf_receipt(receipt_data):
+    """Generate PDF receipt"""
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    
+    # Add content to PDF
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(200, 750, "SALPHINE CHEMOS GETAWAY RESORT")
+    
+    c.setFont("Helvetica", 10)
+    c.drawString(150, 730, "P.O. Box 19938 - 00202 KNH Nairobi")
+    c.drawString(180, 715, "Tel: +254 727 680 468 | +254 736 880 488")
+    c.drawString(200, 700, "Email: info@lukenyagetaway.com")
+    
+    c.line(50, 690, 550, 690)
+    
+    y_position = 670
+    c.drawString(50, y_position, f"Transaction ID: {receipt_data['transaction_id']}")
+    c.drawString(50, y_position-20, f"Date: {receipt_data['date']}")
+    c.drawString(50, y_position-40, f"Customer: {receipt_data['customer_name']}")
+    c.drawString(50, y_position-60, f"Cashier: {receipt_data['user']}")
+    
+    c.line(50, y_position-80, 550, y_position-80)
+    
+    # Items table
+    y_position -= 100
+    c.drawString(50, y_position, "Item")
+    c.drawString(350, y_position, "Qty")
+    c.drawString(400, y_position, "Price")
+    c.drawString(500, y_position, "Total")
+    
+    y_position -= 20
+    for item in receipt_data['items']:
+        c.drawString(50, y_position, item['name'][:40])
+        c.drawString(350, y_position, str(item['quantity']))
+        c.drawString(400, y_position, f"KES {item['price']:,.2f}")
+        c.drawString(500, y_position, f"KES {item['total']:,.2f}")
+        y_position -= 20
+    
+    c.line(50, y_position, 550, y_position)
+    y_position -= 20
+    
+    c.drawString(400, y_position, f"Subtotal: KES {receipt_data['subtotal']:,.2f}")
+    y_position -= 20
+    c.drawString(400, y_position, f"Tax ({receipt_data['tax_rate']}%): KES {receipt_data['tax_amount']:,.2f}")
+    y_position -= 20
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(400, y_position, f"TOTAL: KES {receipt_data['total']:,.2f}")
+    
+    y_position -= 40
+    c.setFont("Helvetica", 10)
+    c.drawString(50, y_position, f"Payment Method: {receipt_data['payment_method']}")
+    
+    y_position -= 40
+    c.drawString(200, y_position, "Thank you for your business!")
+    c.drawString(200, y_position-20, "Visit us: www.salphinechemos.com")
+    
+    c.save()
+    
+    buffer.seek(0)
+    st.download_button(
+        label="⬇️ Click to Download PDF",
+        data=buffer,
+        file_name=f"receipt_{receipt_data['transaction_id']}.pdf",
+        mime="application/pdf"
+    )
+
+def generate_excel_receipt(receipt_data):
+    """Generate Excel receipt"""
+    # Create items dataframe
+    items_data = []
+    for item in receipt_data['items']:
+        items_data.append({
+            'Item Name': item['name'],
+            'Quantity': item['quantity'],
+            'Unit Price (KES)': item['price'],
+            'Total (KES)': item['total']
+        })
+    
+    df_items = pd.DataFrame(items_data)
+    
+    # Create summary dataframe
+    summary_data = {
+        'Transaction ID': [receipt_data['transaction_id']],
+        'Date': [receipt_data['date']],
+        'Customer': [receipt_data['customer_name']],
+        'Cashier': [receipt_data['user']],
+        'Subtotal (KES)': [receipt_data['subtotal']],
+        'Tax Rate (%)': [receipt_data['tax_rate']],
+        'Tax Amount (KES)': [receipt_data['tax_amount']],
+        'Total (KES)': [receipt_data['total']],
+        'Payment Method': [receipt_data['payment_method']]
+    }
+    df_summary = pd.DataFrame(summary_data)
+    
+    # Write to Excel
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_items.to_excel(writer, sheet_name='Items', index=False)
+        df_summary.to_excel(writer, sheet_name='Summary', index=False)
+    
+    buffer.seek(0)
+    st.download_button(
+        label="⬇️ Click to Download Excel",
+        data=buffer,
+        file_name=f"receipt_{receipt_data['transaction_id']}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+# MODULE 4: Sorted Inventory List
+def show_inventory():
+    st.markdown("<h1 class='main-header'>📦 Inventory Management</h1>", unsafe_allow_html=True)
+    
+    products, _ = db.get_sample_data()
+    
+    # CRUD Operations
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 View Inventory", "➕ Add Product", "✏️ Edit Product", "🔍 Search & Filter"])
+    
+    with tab1:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            view_option = st.selectbox("View Mode", ["All Products", "Low Stock", "Critical Stock"])
+        
+        with col2:
+            sort_by = st.selectbox("Sort By", ["Name", "Category", "Stock Level", "Price"])
+        
+        with col3:
+            sort_order = st.selectbox("Order", ["Ascending", "Descending"])
+        
+        # Filter products
+        if view_option == "Low Stock":
+            filtered_products = [p for p in products if p['stock_quantity'] < p['min_stock_level']]
+        elif view_option == "Critical Stock":
+            filtered_products = [p for p in products if p['stock_quantity'] < p['min_stock_level'] * 0.3]
+        else:
+            filtered_products = products
+        
+        # Sort products
+        sort_key = {
+            "Name": "name",
+            "Category": "category",
+            "Stock Level": "stock_quantity",
+            "Price": "price"
+        }[sort_by]
+        
+        sorted_products = quicksort_products(filtered_products, sort_key)
+        if sort_order == "Descending":
+            sorted_products = sorted_products[::-1]
+        
+        # Display inventory table with color coding
+        inventory_data = []
+        for product in sorted_products:
+            stock_level = product['stock_quantity']
+            min_level = product['min_stock_level']
+            
+            if stock_level >= min_level:
+                status = "🟢 Adequate"
+                status_class = "stock-green"
+            elif stock_level >= min_level * 0.3:
+                status = "🟡 Low"
+                status_class = "stock-yellow"
+            else:
+                status = "🔴 Critical"
+                status_class = "stock-red"
+            
+            inventory_data.append({
+                'ID': product['id'],
+                'Name': product['name'],
+                'Category': product['category'],
+                'Price': f"KES {product['price']:,.2f}",
+                'Stock': product['stock_quantity'],
+                'Min Level': product['min_stock_level'],
+                'Status': status
+            })
+        
+        df_inventory = pd.DataFrame(inventory_data)
+        st.dataframe(df_inventory, width='stretch', hide_index=True)
+        
+        # Stock level visualization
+        st.markdown("### 📊 Stock Level Analysis")
+        
+        categories = {}
+        for product in products:
+            cat = product['category']
+            if cat not in categories:
+                categories[cat] = {'total': 0, 'low': 0, 'critical': 0}
+            
+            categories[cat]['total'] += 1
+            if product['stock_quantity'] < product['min_stock_level'] * 0.3:
+                categories[cat]['critical'] += 1
+            elif product['stock_quantity'] < product['min_stock_level']:
+                categories[cat]['low'] += 1
+        
+        cat_df = pd.DataFrame([
+            {
+                'Category': cat,
+                'Adequate': data['total'] - data['low'] - data['critical'],
+                'Low': data['low'],
+                'Critical': data['critical']
+            }
+            for cat, data in categories.items()
+        ])
+        
+        fig = px.bar(cat_df.melt(id_vars='Category'), 
+                    x='Category', y='value', color='variable',
+                    color_discrete_map={'Adequate': '#10B981', 'Low': '#F59E0B', 'Critical': '#EF4444'},
+                    title="Stock Status by Category")
+        st.plotly_chart(fig, width='stretch')
+    
+    with tab2:
+        st.markdown("### Add New Product")
+        
+        with st.form("add_product_form"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                name = st.text_input("Product Name*", placeholder="Enter product name")
+                category = st.selectbox("Category*", ["Beverages", "Food", "Dessert", "Snacks", "Other"])
+                price = st.number_input("Price (KES)*", min_value=0.0, step=0.01, format="%.2f")
+            
+            with col2:
+                stock_quantity = st.number_input("Initial Stock*", min_value=0, step=1)
+                min_stock_level = st.number_input("Minimum Stock Level*", min_value=1, step=1, value=10)
+                description = st.text_area("Description", placeholder="Product description...")
+            
+            submitted = st.form_submit_button("➕ Add Product", type="primary")
+            
+            if submitted:
+                if name and price > 0:
+                    # Add product logic here
+                    st.success(f"Product '{name}' added successfully!")
+                    st.rerun()
+                else:
+                    st.error("Please fill in all required fields (*)")
+    
+    with tab3:
+        st.markdown("### Edit Existing Product")
+        
+        product_list = [f"{p['id']} - {p['name']}" for p in products]
+        selected_product = st.selectbox("Select Product to Edit", product_list)
+        
+        if selected_product:
+            product_id = int(selected_product.split(" - ")[0])
+            product = next((p for p in products if p['id'] == product_id), None)
+            
+            if product:
+                with st.form("edit_product_form"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        new_name = st.text_input("Product Name", value=product['name'])
+                        new_category = st.selectbox("Category", 
+                                                   ["Beverages", "Food", "Dessert", "Snacks", "Other"],
+                                                   index=["Beverages", "Food", "Dessert", "Snacks", "Other"].index(product['category']) 
+                                                   if product['category'] in ["Beverages", "Food", "Dessert", "Snacks", "Other"] else 0)
+                        new_price = st.number_input("Price (KES)", value=float(product['price']), 
+                                                   min_value=0.0, step=0.01, format="%.2f")
+                    
+                    with col2:
+                        new_stock = st.number_input("Stock Quantity", value=product['stock_quantity'], min_value=0, step=1)
+                        new_min_level = st.number_input("Min Stock Level", value=product['min_stock_level'], min_value=1, step=1)
+                        new_description = st.text_area("Description", value=product.get('description', ''))
+                    
+                    col_btn1, col_btn2 = st.columns(2)
+                    with col_btn1:
+                        update_btn = st.form_submit_button("💾 Update Product", type="primary")
+                    with col_btn2:
+                        delete_btn = st.form_submit_button("🗑️ Delete Product", type="secondary")
+                    
+                    if update_btn:
+                        st.success(f"Product '{new_name}' updated successfully!")
+                    if delete_btn:
+                        st.warning(f"Are you sure you want to delete '{product['name']}'?")
+    
+    with tab4:
+        st.markdown("### Advanced Search & Filter")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            search_name = st.text_input("Search by Name", placeholder="Enter product name...")
+            price_range = st.slider("Price Range (KES)", 0.0, 1000.0, (0.0, 1000.0))
+        
+        with col2:
+            search_category = st.multiselect("Categories", ["Beverages", "Food", "Dessert", "Snacks", "Other"])
+            stock_range = st.slider("Stock Range", 0, 200, (0, 200))
+        
+        # Apply filters
+        filtered = products
+        
+        if search_name:
+            filtered = [p for p in filtered if search_name.lower() in p['name'].lower()]
+        
+        if search_category:
+            filtered = [p for p in filtered if p['category'] in search_category]
+        
+        filtered = [p for p in filtered if price_range[0] <= p['price'] <= price_range[1]]
+        filtered = [p for p in filtered if stock_range[0] <= p['stock_quantity'] <= stock_range[1]]
+        
+        if filtered:
+            df_filtered = pd.DataFrame(filtered)
+            st.dataframe(df_filtered[['name', 'category', 'price', 'stock_quantity']], width='stretch', hide_index=True)
+        else:
+            st.info("No products match your search criteria")
+
+# MODULE 5: Sales Reports Interface
+def show_reports():
+    st.markdown("<h1 class='main-header'>📈 Sales Reports & Analytics</h1>", unsafe_allow_html=True)
+    
+    # Generate sample sales data
+    products, _ = db.get_sample_data()
+    
+    # Time period selection
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        report_type = st.selectbox("Report Type", 
+                                  ["Sales Summary", "Product Performance", "Category Analysis", "Time Series"])
+    
+    with col2:
+        time_period = st.selectbox("Time Period", 
+                                  ["Today", "Yesterday", "Last 7 Days", "This Month", "Last Month", "Custom Range"])
+    
+    with col3:
+        if time_period == "Custom Range":
+            date_col1, date_col2 = st.columns(2)
+            with date_col1:
+                start_date = st.date_input("Start Date")
+            with date_col2:
+                end_date = st.date_input("End Date")
+    
+    # Generate sample sales data based on selection
+    dates = pd.date_range(start='2024-01-01', end='2024-01-31', freq='D')
+    sales_data = []
+    
+    for date in dates:
+        daily_sales = random.randint(50, 200)
+        for _ in range(daily_sales):
+            product = random.choice(products)
+            qty = random.randint(1, 5)
+            sales_data.append({
+                'date': date,
+                'product': product['name'],
+                'category': product['category'],
+                'quantity': qty,
+                'price': product['price'],
+                'total': product['price'] * qty,
+                'payment_method': random.choice(['Cash', 'Credit Card', 'M-Pesa', 'Debit Card'])
+            })
+    
+    df_sales = pd.DataFrame(sales_data)
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary Dashboard", "📈 Visual Charts", "📋 Data Tables", "📤 Export Data"])
+    
+    with tab1:
+        # Key metrics
+        total_sales = df_sales['total'].sum()
+        avg_sale = df_sales['total'].mean()
+        total_transactions = len(df_sales)
+        top_product = df_sales.groupby('product')['quantity'].sum().idxmax()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown(f"""
+            <div class='metric-card success-card'>
+                <h3>💰 Total Sales</h3>
+                <h2>KES {total_sales:,.2f}</h2>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+            <div class='metric-card info-card'>
+                <h3>🧾 Transactions</h3>
+                <h2>{total_transactions}</h2>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"""
+            <div class='metric-card warning-card'>
+                <h3>📦 Avg. Sale</h3>
+                <h2>KES {avg_sale:,.2f}</h2>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown(f"""
+            <div class='metric-card'>
+                <h3>🏆 Top Product</h3>
+                <h4>{top_product}</h4>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Top products table
+        st.markdown("### 🏆 Top 10 Products by Sales")
+        top_products = df_sales.groupby('product').agg({
+            'quantity': 'sum',
+            'total': 'sum'
+        }).sort_values('total', ascending=False).head(10)
+        
+        st.dataframe(top_products.style.format({'total': 'KES {:,.2f}'}), 
+                    width='stretch')
+    
+    with tab2:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### Sales by Category")
+            
+            category_sales = df_sales.groupby('category')['total'].sum().reset_index()
+            fig = px.pie(category_sales, values='total', names='category',
+                        color_discrete_sequence=px.colors.qualitative.Set3)
+            fig.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig, width='stretch')
+        
+        with col2:
+            st.markdown("### Daily Sales Trend")
+            
+            daily_trend = df_sales.groupby('date')['total'].sum().reset_index()
+            fig = px.line(daily_trend, x='date', y='total',
+                         title="Sales Over Time",
+                         markers=True)
+            fig.update_layout(xaxis_title="Date", yaxis_title="Total Sales (KES)")
+            st.plotly_chart(fig, width='stretch')
+        
+        # Payment method distribution
+        st.markdown("### Payment Methods Distribution")
+        payment_dist = df_sales.groupby('payment_method')['total'].sum().reset_index()
+        
+        fig = px.bar(payment_dist, x='payment_method', y='total',
+                    color='payment_method',
+                    title="Sales by Payment Method")
+        fig.update_layout(xaxis_title="Payment Method", yaxis_title="Total Sales (KES)")
+        st.plotly_chart(fig, width='stretch')
+    
+    with tab3:
+        st.markdown("### Detailed Sales Data")
+        
+        # Filters for the table
+        col_filter1, col_filter2, col_filter3 = st.columns(3)
+        
+        with col_filter1:
+            table_category = st.multiselect("Filter by Category", df_sales['category'].unique())
+        
+        with col_filter2:
+            table_products = st.multiselect("Filter by Product", df_sales['product'].unique())
+        
+        with col_filter3:
+            sort_table = st.selectbox("Sort By", ["Date", "Product", "Total", "Quantity"])
+        
+        # Apply filters
+        filtered_df = df_sales.copy()
+        
+        if table_category:
+            filtered_df = filtered_df[filtered_df['category'].isin(table_category)]
+        
+        if table_products:
+            filtered_df = filtered_df[filtered_df['product'].isin(table_products)]
+        
+        # Sort table
+        filtered_df = filtered_df.sort_values(sort_table.lower())
+        
+        # Display table
+        st.dataframe(filtered_df, width='stretch')
+        
+        # Summary statistics
+        st.markdown("### Summary Statistics")
+        summary_stats = filtered_df.describe()
+        st.dataframe(summary_stats, width='stretch')
+    
+    with tab4:
+        st.markdown("### Export Reports")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            export_format = st.selectbox("Export Format", 
+                                        ["CSV", "Excel", "PDF Summary", "JSON"])
+        
+        with col2:
+            data_type = st.selectbox("Data Type", 
+                                    ["Sales Data", "Summary Report", "Product Performance", "Category Analysis"])
+        
+        with col3:
+            include_charts = st.checkbox("Include Charts", value=True)
+        
+        # Generate export data
+        if data_type == "Sales Data":
+            export_df = df_sales
+        elif data_type == "Summary Report":
+            export_df = pd.DataFrame({
+                'Metric': ['Total Sales', 'Total Transactions', 'Average Sale', 'Top Product'],
+                'Value': [f"KES {total_sales:,.2f}", total_transactions, 
+                         f"KES {avg_sale:,.2f}", top_product]
+            })
+        elif data_type == "Product Performance":
+            export_df = df_sales.groupby('product').agg({
+                'quantity': 'sum',
+                'total': 'sum'
+            }).reset_index()
+        else:  # Category Analysis
+            export_df = df_sales.groupby('category').agg({
+                'quantity': 'sum',
+                'total': 'sum',
+                'price': 'mean'
+            }).reset_index()
+        
+        # Export buttons
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        
+        with col_btn1:
+            if st.button("📥 Download CSV", width='stretch'):
+                csv = export_df.to_csv(index=False)
+                st.download_button(
+                    label="⬇️ Click to Download",
+                    data=csv,
+                    file_name=f"sales_report_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+        
+        with col_btn2:
+            if st.button("📊 Download Excel", width='stretch'):
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    export_df.to_excel(writer, index=False, sheet_name='Report')
+                buffer.seek(0)
+                st.download_button(
+                    label="⬇️ Click to Download",
+                    data=buffer,
+                    file_name=f"sales_report_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        
+        with col_btn3:
+            if st.button("📄 Download PDF", width='stretch'):
+                st.info("PDF generation would be implemented with reportlab")
+
+# MODULE 6: User Management Interface (Admin Only)
+def show_user_management():
+    st.markdown("<h1 class='main-header'>👥 User Management</h1>", unsafe_allow_html=True)
+    
+    # Check if user is admin
+    if not st.session_state.current_user or st.session_state.current_user.get('role') != 'admin':
+        st.warning("⚠️ This section is only accessible to administrators.")
+        return
+    
+    _, users = db.get_sample_data()
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["👤 User List", "➕ Add User", "📊 Activity Logs", "⚙️ Account Settings"])
+    
+    with tab1:
+        st.markdown("### Registered Users")
+        
+        # Display users in a dataframe
+        user_data = []
+        for user in users:
+            status = "🟢 Active" if random.choice([True, False]) else "🔴 Inactive"
+            user_data.append({
+                'ID': user['id'],
+                'Username': user['username'],
+                'Role': user['role'],
+                'Email': user['email'],
+                'Status': status,
+                'Last Login': f"{random.randint(1, 30)} days ago"
+            })
+        
+        df_users = pd.DataFrame(user_data)
+        st.dataframe(df_users, width='stretch', hide_index=True)
+        
+        # Actions based on editor
+        if st.button("💾 Save Changes", type="primary"):
+            st.success("User data updated successfully!")
+    
+    with tab2:
+        st.markdown("### Add New User")
+        
+        with st.form("add_user_form"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                new_username = st.text_input("Username*", placeholder="Enter username")
+                new_email = st.text_input("Email*", placeholder="user@example.com")
+                new_password = st.text_input("Password*", type="password", placeholder="Enter password")
+            
+            with col2:
+                new_role = st.selectbox("Role*", ["admin", "manager", "clerk"])
+                is_active = st.checkbox("Active Account", value=True)
+                send_welcome = st.checkbox("Send welcome email", value=True)
+            
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                submit_user = st.form_submit_button("👤 Add User", type="primary")
+            with col_btn2:
+                cancel_user = st.form_submit_button("Cancel", type="secondary")
+            
+            if submit_user:
+                if new_username and new_email and new_password:
+                    st.success(f"User '{new_username}' added successfully!")
+                    if send_welcome:
+                        st.info("Welcome email sent successfully!")
+                else:
+                    st.error("Please fill in all required fields (*)")
+    
+    with tab3:
+        st.markdown("### 📜 User Activity Logs")
+        
+        # Generate sample activity logs
+        activities = []
+        actions = ['Login', 'Logout', 'Sale', 'Inventory Update', 'Report Generated', 'User Modified']
+        
+        for i in range(50):
+            activities.append({
+                'Timestamp': (datetime.now() - timedelta(minutes=random.randint(1, 10080))).strftime("%Y-%m-%d %H:%M:%S"),
+                'User': random.choice([u['username'] for u in users]),
+                'Action': random.choice(actions),
+                'Details': f"Performed {random.choice(actions)} operation",
+                'IP Address': f"192.168.1.{random.randint(1, 255)}"
+            })
+        
+        df_activities = pd.DataFrame(activities)
+        
+        # Filter options
+        col_filter1, col_filter2 = st.columns(2)
+        
+        with col_filter1:
+            log_user = st.multiselect("Filter by User", df_activities['User'].unique())
+        
+        with col_filter2:
+            log_action = st.multiselect("Filter by Action", df_activities['Action'].unique())
+        
+        # Apply filters
+        filtered_logs = df_activities.copy()
+        
+        if log_user:
+            filtered_logs = filtered_logs[filtered_logs['User'].isin(log_user)]
+        
+        if log_action:
+            filtered_logs = filtered_logs[filtered_logs['Action'].isin(log_action)]
+        
+        # Display logs
+        st.dataframe(filtered_logs, width='stretch', hide_index=True)
+        
+        # Export logs
+        if st.button("📥 Export Activity Logs", type="primary"):
+            csv = filtered_logs.to_csv(index=False)
+            st.download_button(
+                label="⬇️ Download CSV",
+                data=csv,
+                file_name=f"activity_logs_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+    
+    with tab4:
+        st.markdown("### Account Settings Management")
+        
+        selected_user = st.selectbox("Select User", [u['username'] for u in users])
+        
+        if selected_user:
+            user = next((u for u in users if u['username'] == selected_user), None)
+            
+            if user:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### Account Status")
+                    
+                    current_status = "🟢 Active" if random.choice([True, False]) else "🔴 Inactive"
+                    st.write(f"**Current Status:** {current_status}")
+                    
+                    new_status = st.radio("Change Status", ["Active", "Inactive", "Suspended"])
+                    
+                    if st.button("🔄 Update Status", type="primary"):
+                        st.success(f"Account status updated to: {new_status}")
+                
+                with col2:
+                    st.markdown("#### Role Management")
+                    
+                    st.write(f"**Current Role:** {user['role']}")
+                    new_role = st.selectbox("Assign New Role", ["admin", "manager", "clerk"])
+                    
+                    if st.button("👑 Update Role", type="primary"):
+                        st.success(f"Role updated to: {new_role}")
+                
+                st.markdown("---")
+                st.markdown("#### Dangerous Zone")
+                
+                col_danger1, col_danger2 = st.columns(2)
+                
+                with col_danger1:
+                    if st.button("🔒 Force Password Reset", type="secondary"):
+                        st.warning("Password reset email sent to user.")
+                
+                with col_danger2:
+                    if st.button("🗑️ Delete Account", type="secondary"):
+                        st.error("Are you sure you want to delete this account? This action cannot be undone.")
+                        confirm = st.checkbox("I confirm I want to delete this account")
+                        if confirm:
+                            st.error("Account deletion initiated. Contact system administrator for final confirmation.")
+
+# MODULE 7: Settings System Interface
 def show_settings():
     st.markdown("<h1 class='main-header'>⚙️ System Settings</h1>", unsafe_allow_html=True)
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏢 Business Profile", "🧾 Receipt Template", "🔔 Notifications", "📱 Mobile Payments", "🛠️ System Preferences"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🏢 Business Profile", "🧾 Receipt Template", "🔔 Notifications", "🛠️ System Preferences"])
     
     with tab1:
         st.markdown("### Business Information")
@@ -882,7 +1274,7 @@ def show_settings():
             col1, col2 = st.columns(2)
             
             with col1:
-                business_name = st.text_input("Business Name*", value="Salphine Chemos Getaway Resort")
+                business_name = st.text_input("Business Name*", value="Lukenya Getaway Resort")
                 tax_id = st.text_input("Tax ID/VAT Number", value="P123456789")
                 currency = st.selectbox("Currency", ["KES", "USD", "EUR", "GBP"], index=0)
                 tax_rate = st.number_input("Default Tax Rate (%)", value=16.0, min_value=0.0, max_value=30.0, step=0.1)
@@ -891,8 +1283,8 @@ def show_settings():
                 address = st.text_area("Address", value="P.O. Box 19938 - 00202 KNH Nairobi")
                 phone1 = st.text_input("Primary Phone", value="+254 727 680 468")
                 phone2 = st.text_input("Secondary Phone", value="+254 736 880 488")
-                email = st.text_input("Business Email", value="info@salphinechemos.com")
-                website = st.text_input("Website", value="www.salphinechemos.com")
+                email = st.text_input("Business Email", value="info@lukenyagetaway.com")
+                website = st.text_input("Website", value="www.lukenyagetaway.com")
             
             logo_file = st.file_uploader("Upload Business Logo", type=['png', 'jpg', 'jpeg'])
             
@@ -945,198 +1337,350 @@ def show_settings():
                 st.success("Receipt template updated successfully!")
     
     with tab3:
-        st.markdown("### 🔔 Notification Settings")
+        st.markdown("### Notification Settings")
         
-        # SMS Configuration
-        st.markdown("#### 📱 SMS Notifications")
-        sms_enabled = st.checkbox("Enable SMS Notifications", value=notification_manager.sms_config['enabled'])
+        col1, col2 = st.columns(2)
         
-        if sms_enabled:
-            sms_provider = st.selectbox("SMS Provider", ["Twilio", "Africa's Talking", "Custom API"])
+        with col1:
+            st.markdown("#### Email Notifications")
             
-            if sms_provider == "Twilio":
-                col1, col2 = st.columns(2)
-                with col1:
-                    twilio_sid = st.text_input("Twilio SID", value=notification_manager.sms_config['twilio_sid'])
-                    twilio_token = st.text_input("Twilio Token", type="password")
-                with col2:
-                    twilio_number = st.text_input("Twilio Phone Number", value=notification_manager.sms_config['twilio_number'])
+            email_notifications = st.checkbox("Enable Email Notifications", value=True)
+            
+            if email_notifications:
+                low_stock_email = st.checkbox("Low Stock Alerts", value=True)
+                sales_report_email = st.checkbox("Daily Sales Reports", value=True)
+                system_alerts = st.checkbox("System Alerts", value=True)
                 
-                notification_manager.sms_config.update({
-                    'provider': 'twilio',
-                    'twilio_sid': twilio_sid,
-                    'twilio_token': twilio_token,
-                    'twilio_number': twilio_number
-                })
+                email_frequency = st.selectbox("Report Frequency", 
+                                              ["Real-time", "Hourly", "Daily", "Weekly"])
+                
+                email_recipients = st.text_area("Notification Recipients (comma-separated)",
+                                               value="admin@system.com, manager@system.com")
+        
+        with col2:
+            st.markdown("#### In-App Notifications")
             
-            # Test SMS
-            if st.button("Test SMS Notification"):
-                test_phone = st.text_input("Test Phone Number", placeholder="2547XXXXXXXX")
-                if test_phone:
-                    success, message = notification_manager.send_sms(test_phone, "Test SMS from Salphine Chemos Sales System")
-                    if success:
-                        st.success("Test SMS sent successfully!")
-                    else:
-                        st.error(f"Failed to send SMS: {message}")
-        
-        # Email Configuration
-        st.markdown("#### 📧 Email Notifications")
-        email_enabled = st.checkbox("Enable Email Notifications", value=notification_manager.email_config['enabled'])
-        
-        if email_enabled:
-            col1, col2 = st.columns(2)
-            with col1:
-                smtp_server = st.text_input("SMTP Server", value=notification_manager.email_config['smtp_server'])
-                smtp_port = st.number_input("SMTP Port", value=notification_manager.email_config['smtp_port'])
-                sender_email = st.text_input("Sender Email", value=notification_manager.email_config['sender_email'])
-            with col2:
-                sender_password = st.text_input("Sender Password", type="password")
-                recipients = st.text_area("Notification Recipients (comma-separated)",
-                                        value=", ".join(notification_manager.email_config['recipients']))
+            inapp_notifications = st.checkbox("Enable In-App Notifications", value=True)
             
-            notification_manager.email_config.update({
-                'smtp_server': smtp_server,
-                'smtp_port': smtp_port,
-                'sender_email': sender_email,
-                'sender_password': sender_password,
-                'recipients': [r.strip() for r in recipients.split(',')] if recipients else []
-            })
-            
-            # Test Email
-            if st.button("Test Email Notification"):
-                test_email = st.text_input("Test Email Address", placeholder="test@example.com")
-                if test_email:
-                    success, message = notification_manager.send_email(
-                        "Test Email from Salphine Chemos",
-                        "This is a test email notification from the sales management system.",
-                        test_email
-                    )
-                    if success:
-                        st.success("Test email sent successfully!")
-                    else:
-                        st.error(f"Failed to send email: {message}")
+            if inapp_notifications:
+                show_sales_popup = st.checkbox("Show Sales Confirmations", value=True)
+                show_stock_alerts = st.checkbox("Show Stock Warnings", value=True)
+                show_system_messages = st.checkbox("Show System Messages", value=True)
+                
+                notification_sound = st.checkbox("Play Notification Sound", value=True)
+                sound_type = st.selectbox("Sound Type", ["Default", "Chime", "Beep", "None"])
         
-        # Stock Alert Settings
-        st.markdown("#### ⚠️ Stock Alert Settings")
-        col_alert1, col_alert2 = st.columns(2)
-        
-        with col_alert1:
-            alert_on_low = st.checkbox("Alert on Low Stock", value=True)
-            low_threshold = st.slider("Low Stock Threshold (%)", 30, 100, 50)
-            
-        with col_alert2:
-            alert_on_critical = st.checkbox("Alert on Critical Stock", value=True)
-            critical_threshold = st.slider("Critical Stock Threshold (%)", 10, 50, 30)
-        
-        # Notification Triggers
-        st.markdown("#### 🔔 Notification Triggers")
-        triggers = st.multiselect(
-            "Send notifications for:",
-            ["Low Stock", "Critical Stock", "Sale Completed", "New User Registration", "System Errors"],
-            default=["Low Stock", "Critical Stock", "Sale Completed"]
-        )
-        
-        if st.button("💾 Save Notification Settings", type="primary"):
-            notification_manager.sms_config['enabled'] = sms_enabled
-            notification_manager.email_config['enabled'] = email_enabled
-            st.success("Notification settings saved successfully!")
+        if st.button("🔔 Save Notification Settings", type="primary"):
+            st.success("Notification settings updated successfully!")
     
     with tab4:
-        st.markdown("### 📱 Mobile Payment Configuration")
+        st.markdown("### System Preferences")
         
-        st.info("Configure mobile payment providers for customer transactions")
+        col1, col2 = st.columns(2)
         
-        # Enable/Disable mobile payments
-        mobile_enabled = st.checkbox("Enable Mobile Payments", 
-                                    value=st.session_state.mobile_payment_config['enabled'])
-        
-        if mobile_enabled:
-            # Provider configurations
-            st.markdown("#### Payment Providers")
+        with col1:
+            st.markdown("#### General Settings")
             
-            for provider in payment_processor.providers:
-                with st.expander(f"{provider} Configuration", expanded=provider=="M-Pesa"):
-                    enabled = st.checkbox(f"Enable {provider}", 
-                                         value=payment_processor.providers[provider]['enabled'],
-                                         key=f"enable_{provider}")
-                    
-                    if provider == "M-Pesa":
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            consumer_key = st.text_input("Consumer Key", 
-                                                        value=payment_processor.providers[provider]['consumer_key'],
-                                                        key=f"key_{provider}")
-                            shortcode = st.text_input("Shortcode",
-                                                     value=payment_processor.providers[provider]['shortcode'],
-                                                     key=f"shortcode_{provider}")
-                        with col2:
-                            consumer_secret = st.text_input("Consumer Secret", 
-                                                           type="password",
-                                                           value=payment_processor.providers[provider]['consumer_secret'],
-                                                           key=f"secret_{provider}")
-                            passkey = st.text_input("Passkey",
-                                                   value=payment_processor.providers[provider]['passkey'],
-                                                   key=f"passkey_{provider}")
-                        
-                        payment_processor.providers[provider].update({
-                            'consumer_key': consumer_key,
-                            'consumer_secret': consumer_secret,
-                            'shortcode': shortcode,
-                            'passkey': passkey
-                        })
-                    
-                    elif provider == "Airtel Money":
-                        client_id = st.text_input("Client ID", 
-                                                 value=payment_processor.providers[provider]['client_id'],
-                                                 key=f"client_id_{provider}")
-                        client_secret = st.text_input("Client Secret", 
-                                                     type="password",
-                                                     value=payment_processor.providers[provider]['client_secret'],
-                                                     key=f"client_secret_{provider}")
-                        
-                        payment_processor.providers[provider].update({
-                            'client_id': client_id,
-                            'client_secret': client_secret
-                        })
-                    
-                    else:
-                        api_key = st.text_input("API Key", 
-                                               type="password",
-                                               value=payment_processor.providers[provider]['api_key'],
-                                               key=f"api_key_{provider}")
-                        payment_processor.providers[provider]['api_key'] = api_key
-                    
-                    payment_processor.providers[provider]['enabled'] = enabled
+            default_view = st.selectbox("Default Dashboard View", 
+                                       ["Sales Overview", "Inventory", "Reports", "User Dashboard"])
             
-            # Test mobile payment
-            st.markdown("#### Test Mobile Payment")
-            col_test1, col_test2, col_test3 = st.columns(3)
-            with col_test1:
-                test_provider = st.selectbox("Provider", list(payment_processor.providers.keys()))
-            with col_test2:
-                test_phone = st.text_input("Test Phone", "254712345678")
-            with col_test3:
-                test_amount = st.number_input("Test Amount (KES)", min_value=1.0, value=10.0)
+            auto_logout = st.checkbox("Enable Auto Logout", value=True)
+            if auto_logout:
+                logout_time = st.slider("Inactivity Timeout (minutes)", 5, 120, 30)
             
-            if st.button("Test Payment", type="primary"):
-                with st.spinner(f"Initiating test {test_provider} payment..."):
-                    success, reference = payment_processor.initiate_payment(
-                        test_provider, test_phone, test_amount, "TEST"
-                    )
-                    if success:
-                        st.success(f"Test payment initiated! Reference: {reference}")
-                    else:
-                        st.error(f"Test payment failed: {reference}")
+            data_retention = st.number_input("Data Retention Period (days)", 
+                                           min_value=30, max_value=365*5, value=365, step=30)
+            
+            backup_frequency = st.selectbox("Auto Backup Frequency", 
+                                          ["Daily", "Weekly", "Monthly", "Never"])
         
-        if st.button("💾 Save Mobile Payment Settings", type="primary"):
-            st.session_state.mobile_payment_config['enabled'] = mobile_enabled
-            st.success("Mobile payment settings saved successfully!")
-    
-    with tab4:  # System Preferences tab remains the same
-        # ... [Keep existing System Preferences code]
-        pass
+        with col2:
+            st.markdown("#### Display Settings")
+            
+            theme = st.selectbox("Theme", ["Light", "Dark", "Auto"])
+            language = st.selectbox("Language", ["English", "Swahili", "French", "Spanish"])
+            date_format = st.selectbox("Date Format", 
+                                      ["YYYY-MM-DD", "DD/MM/YYYY", "MM/DD/YYYY", "DD MMM YYYY"])
+            
+            decimal_places = st.slider("Decimal Places", 0, 4, 2)
+            number_format = st.selectbox("Number Format", 
+                                        ["1,000.00", "1.000,00", "1 000.00"])
+        
+        st.markdown("---")
+        st.markdown("#### System Maintenance")
+        
+        col_maint1, col_maint2, col_maint3 = st.columns(3)
+        
+        with col_maint1:
+            if st.button("🔄 Clear Cache", type="secondary"):
+                st.info("Cache cleared successfully!")
+        
+        with col_maint2:
+            if st.button("📊 Rebuild Indexes", type="secondary"):
+                st.info("Database indexes rebuilt successfully!")
+        
+        with col_maint3:
+            if st.button("🚀 System Diagnostics", type="secondary"):
+                st.info("System diagnostics completed. All systems operational.")
+        
+        if st.button("💾 Save All Settings", type="primary"):
+            st.success("All system settings saved successfully!")
 
-# MODULE 9: Main Navigation Sidebar (Enhanced with Notification Badge)
+# MODULE 8: Security Settings
+def show_security():
+    st.markdown("<h1 class='main-header'>🔐 Security Settings</h1>", unsafe_allow_html=True)
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["🔑 Password Policy", "👥 Access Control", "📜 Audit Logs", "🛡️ Security Features"])
+    
+    with tab1:
+        st.markdown("### Password Security Policy")
+        
+        with st.form("password_policy_form"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                min_length = st.slider("Minimum Password Length", 6, 20, 8)
+                require_uppercase = st.checkbox("Require Uppercase Letters", value=True)
+                require_lowercase = st.checkbox("Require Lowercase Letters", value=True)
+                require_numbers = st.checkbox("Require Numbers", value=True)
+            
+            with col2:
+                require_special = st.checkbox("Require Special Characters", value=True)
+                password_expiry = st.slider("Password Expiry (days)", 0, 365, 90)
+                max_login_attempts = st.slider("Max Failed Login Attempts", 1, 10, 3)
+                lockout_duration = st.slider("Lockout Duration (minutes)", 1, 60, 15)
+            
+            save_policy = st.form_submit_button("💾 Save Policy", type="primary")
+            
+            if save_policy:
+                st.success("Password policy updated successfully!")
+        
+        st.markdown("### Password Strength Test")
+        test_password = st.text_input("Test Password Strength", type="password")
+        
+        if test_password:
+            strength = 0
+            feedback = []
+            
+            if len(test_password) >= 8:
+                strength += 1
+                feedback.append("✓ Minimum length met")
+            else:
+                feedback.append("✗ Minimum length not met")
+            
+            if any(c.isupper() for c in test_password):
+                strength += 1
+                feedback.append("✓ Contains uppercase")
+            
+            if any(c.islower() for c in test_password):
+                strength += 1
+                feedback.append("✓ Contains lowercase")
+            
+            if any(c.isdigit() for c in test_password):
+                strength += 1
+                feedback.append("✓ Contains numbers")
+            
+            if any(not c.isalnum() for c in test_password):
+                strength += 1
+                feedback.append("✓ Contains special characters")
+            
+            # Display strength meter
+            colors = ['#EF4444', '#F59E0B', '#FBBF24', '#10B981', '#059669']
+            strength_text = ['Very Weak', 'Weak', 'Fair', 'Good', 'Excellent']
+            
+            st.markdown(f"""
+            <div style="background-color: #F3F4F6; padding: 10px; border-radius: 5px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span>Password Strength:</span>
+                    <span style="color: {colors[strength-1]}; font-weight: bold;">{strength_text[strength-1]}</span>
+                </div>
+                <div style="height: 10px; background-color: #E5E7EB; border-radius: 5px;">
+                    <div style="width: {strength * 20}%; height: 100%; background-color: {colors[strength-1]}; border-radius: 5px;"></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            for item in feedback:
+                st.write(item)
+    
+    with tab2:
+        st.markdown("### Role-Based Access Control")
+        
+        roles = ['admin', 'manager', 'clerk']
+        selected_role = st.selectbox("Select Role to Configure", roles)
+        
+        if selected_role:
+            st.markdown(f"#### Permissions for {selected_role.upper()} Role")
+            
+            col_perm1, col_perm2, col_perm3 = st.columns(3)
+            
+            with col_perm1:
+                st.markdown("**Sales Module**")
+                can_process_sales = st.checkbox("Process Sales", value=True)
+                can_view_sales = st.checkbox("View Sales", value=True)
+                can_refund_sales = st.checkbox("Process Refunds", value=selected_role in ['admin', 'manager'])
+            
+            with col_perm2:
+                st.markdown("**Inventory Module**")
+                can_view_inventory = st.checkbox("View Inventory", value=True)
+                can_edit_inventory = st.checkbox("Edit Inventory", value=selected_role in ['admin', 'manager'])
+                can_delete_inventory = st.checkbox("Delete Items", value=selected_role == 'admin')
+            
+            with col_perm3:
+                st.markdown("**Reports Module**")
+                can_view_reports = st.checkbox("View Reports", value=True)
+                can_export_reports = st.checkbox("Export Reports", value=selected_role in ['admin', 'manager'])
+                can_view_analytics = st.checkbox("View Analytics", value=selected_role in ['admin', 'manager'])
+            
+            if selected_role in ['admin', 'manager']:
+                st.markdown("**Administration**")
+                col_admin1, col_admin2 = st.columns(2)
+                
+                with col_admin1:
+                    can_manage_users = st.checkbox("Manage Users", value=selected_role == 'admin')
+                    can_manage_settings = st.checkbox("Manage Settings", value=selected_role == 'admin')
+                
+                with col_admin2:
+                    can_view_logs = st.checkbox("View System Logs", value=True)
+                    can_backup_data = st.checkbox("Backup Data", value=selected_role == 'admin')
+            
+            if st.button(f"💾 Save {selected_role} Permissions", type="primary"):
+                st.success(f"Permissions for {selected_role} role saved successfully!")
+    
+    with tab3:
+        st.markdown("### Security Audit Logs")
+        
+        # Generate sample security logs
+        security_logs = []
+        security_actions = ['Login Attempt', 'Password Change', 'Permission Change', 
+                          'User Creation', 'User Deletion', 'Failed Access Attempt']
+        
+        for i in range(30):
+            security_logs.append({
+                'Timestamp': (datetime.now() - timedelta(hours=random.randint(1, 720))).strftime("%Y-%m-%d %H:%M:%S"),
+                'Event': random.choice(security_actions),
+                'User': random.choice(['admin', 'manager1', 'clerk1', 'Unknown']),
+                'IP Address': f"192.168.1.{random.randint(1, 255)}",
+                'Status': random.choice(['SUCCESS', 'FAILED', 'WARNING']),
+                'Details': f"Security event: {random.choice(security_actions)}"
+            })
+        
+        df_security = pd.DataFrame(security_logs)
+        
+        # Color code status
+        def color_status(val):
+            if val == 'SUCCESS':
+                return 'color: #10B981; font-weight: bold'
+            elif val == 'FAILED':
+                return 'color: #EF4444; font-weight: bold'
+            else:
+                return 'color: #F59E0B; font-weight: bold'
+        
+        # Filter options
+        col_filter1, col_filter2 = st.columns(2)
+        
+        with col_filter1:
+            log_event = st.multiselect("Filter by Event", df_security['Event'].unique())
+        
+        with col_filter2:
+            log_status = st.multiselect("Filter by Status", df_security['Status'].unique())
+        
+        # Apply filters
+        filtered_security = df_security.copy()
+        
+        if log_event:
+            filtered_security = filtered_security[filtered_security['Event'].isin(log_event)]
+        
+        if log_status:
+            filtered_security = filtered_security[filtered_security['Status'].isin(log_status)]
+        
+        # Display logs
+        st.dataframe(filtered_security, width='stretch', hide_index=True)
+        
+        # Export and clear logs
+        col_export, col_clear = st.columns(2)
+        
+        with col_export:
+            if st.button("📥 Export Audit Logs", type="primary"):
+                csv = filtered_security.to_csv(index=False)
+                st.download_button(
+                    label="⬇️ Download CSV",
+                    data=csv,
+                    file_name=f"audit_logs_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+        
+        with col_clear:
+            if st.button("🗑️ Clear Old Logs", type="secondary"):
+                st.warning("This will delete logs older than 90 days. Continue?")
+                if st.checkbox("Yes, clear old logs"):
+                    st.info("Old logs cleared successfully!")
+    
+    with tab4:
+        st.markdown("### Advanced Security Features")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Authentication")
+            
+            two_factor_auth = st.checkbox("Enable Two-Factor Authentication", value=False)
+            if two_factor_auth:
+                two_factor_method = st.selectbox("2FA Method", 
+                                                ["SMS", "Email", "Authenticator App"])
+                require_2fa_admins = st.checkbox("Require 2FA for Admins", value=True)
+                require_2fa_all = st.checkbox("Require 2FA for All Users", value=False)
+            
+            biometric_auth = st.checkbox("Enable Biometric Authentication", value=False)
+            if biometric_auth:
+                st.info("Biometric authentication requires compatible hardware")
+        
+        with col2:
+            st.markdown("#### Session Security")
+            
+            single_session = st.checkbox("Single Session Per User", value=True)
+            if single_session:
+                st.info("Users will be logged out from other devices")
+            
+            session_timeout = st.slider("Session Timeout (minutes)", 15, 480, 30)
+            secure_cookies = st.checkbox("Secure Cookies Only", value=True)
+            http_only = st.checkbox("HTTP Only Cookies", value=True)
+        
+        st.markdown("---")
+        st.markdown("#### Data Protection")
+        
+        col_prot1, col_prot2 = st.columns(2)
+        
+        with col_prot1:
+            data_encryption = st.checkbox("Enable Data Encryption", value=True)
+            if data_encryption:
+                encryption_level = st.selectbox("Encryption Level", 
+                                              ["AES-128", "AES-256", "RSA-2048", "RSA-4096"])
+            
+            backup_encryption = st.checkbox("Encrypt Backups", value=True)
+        
+        with col_prot2:
+            mask_sensitive = st.checkbox("Mask Sensitive Data", value=True)
+            if mask_sensitive:
+                mask_fields = st.multiselect("Fields to Mask", 
+                                           ["Passwords", "Credit Cards", "Phone Numbers", "Email Addresses"])
+            
+            auto_logout_sensitive = st.checkbox("Auto-logout on Sensitive Operations", value=True)
+        
+        st.markdown("---")
+        st.markdown("#### Security Monitoring")
+        
+        intrusion_detection = st.checkbox("Enable Intrusion Detection", value=True)
+        if intrusion_detection:
+            alert_on_many_failures = st.checkbox("Alert on Multiple Failures", value=True)
+            monitor_privileged = st.checkbox("Monitor Privileged Accounts", value=True)
+            log_all_access = st.checkbox("Log All Access Attempts", value=True)
+        
+        if st.button("🛡️ Apply Security Settings", type="primary"):
+            st.success("Security settings applied successfully!")
+            st.info("Some settings may require system restart to take effect")
+
+# MODULE 9: Main Navigation Sidebar
 def main_navigation():
     # Only show navigation if authenticated
     if not st.session_state.authenticated:
@@ -1161,32 +1705,16 @@ def main_navigation():
             margin-bottom: 1rem;
             text-align: center;
         }
-        .notification-sidebar {
-            background-color: #FFEAA7;
-            padding: 0.5rem;
-            border-radius: 5px;
-            margin-bottom: 1rem;
-            text-align: center;
-            cursor: pointer;
-        }
         </style>
         """, unsafe_allow_html=True)
         
-        # User info with notification badge
+        # User info
         if st.session_state.current_user:
             user_role_icon = {
                 'admin': '👑',
                 'manager': '📊',
                 'clerk': '💼'
             }.get(st.session_state.current_user.get('role', 'user'), '👤')
-            
-            # Notification badge in sidebar
-            if st.session_state.notification_count > 0:
-                st.markdown(f"""
-                <div class='notification-sidebar' onclick="alert('You have {st.session_state.notification_count} notifications')">
-                    🔔 {st.session_state.notification_count} New Notification(s)
-                </div>
-                """, unsafe_allow_html=True)
             
             st.markdown(f"""
             <div class='user-info'>
@@ -1225,19 +1753,6 @@ def main_navigation():
         }
         
         st.session_state.selected_module = module_map[selected]
-        
-        # Quick SMS Compose
-        st.markdown("---")
-        with st.expander("📱 Quick SMS", expanded=False):
-            quick_phone = st.text_input("Phone", placeholder="2547XXXXXXXX")
-            quick_message = st.text_area("Message", placeholder="Quick message...")
-            if st.button("Send SMS", type="primary"):
-                if quick_phone and quick_message:
-                    success, msg = notification_manager.send_sms(quick_phone, quick_message)
-                    if success:
-                        st.success("SMS sent!")
-                    else:
-                        st.error(f"Failed: {msg}")
         
         # Business info footer
         st.markdown("---")
@@ -1284,13 +1799,6 @@ def main():
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
                     if st.button("✅ Yes, Logout", type="primary"):
-                        # Add logout notification
-                        notification_manager.add_notification(
-                            "👋 User Logged Out",
-                            f"User {st.session_state.current_user['username']} logged out",
-                            "info"
-                        )
-                        
                         st.session_state.authenticated = False
                         st.session_state.current_user = None
                         st.session_state.cart = []

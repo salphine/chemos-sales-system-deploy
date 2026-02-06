@@ -238,4 +238,4 @@ if __name__ == "__main__":
     products, _ = db.get_sample_data()
     print(f"Sample products: {len(products)}")
     
-    db.close()
+    db.close() 
