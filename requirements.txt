@@ -1,0 +1,5 @@
+@"
+streamlit==1.28.0
+pandas==2.1.4
+numpy==1.24.3
+"@ | Out-File -FilePath "requirements.txt" -Encoding UTF8 -Force
