@@ -1,3 +1,13 @@
+# Core dependencies
 streamlit==1.28.0
-rich==13.9.4
-plotly
+pandas==2.2.0
+numpy==1.26.4
+
+# UI components
+streamlit-option-menu==0.3.6
+
+# PDF generation
+reportlab==4.1.0
+
+# Optional: Uncomment if you need SMS
+# twilio==8.13.0
