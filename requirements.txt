@@ -1,5 +1,3 @@
-@"
 streamlit==1.28.0
-pandas==2.1.4
+pandas==1.5.3  # Older but more compatible
 numpy==1.24.3
-"@ | Out-File -FilePath "requirements.txt" -Encoding UTF8 -Force
