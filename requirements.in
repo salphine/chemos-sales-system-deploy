@@ -1,4 +1,3 @@
-streamlit==1.28.0
-plotly
+streamlit
 pandas
-rich==13.9.4
+plotly
